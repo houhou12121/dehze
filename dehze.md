@@ -190,7 +190,7 @@ if self.attention_save:
             block_attention[i, j] = np.mean(attention_map_to_save.numpy()[pixel_idx, :])
 ```
 
-## 6. Forward Pass Flow
+## 6. PSTB module
 
 ```python
 
