@@ -15,7 +15,7 @@
 
 ## 🏗️ Overview
 
-PGARN implements a novel deep learning architecture that integrates atmospheric scattering physics with transformer-based attention mechanisms for single image dehazing. The network follows an **encoder-transformer-decoder** paradigm with explicit physics-guided modules.
+PGARN implements a novel deep learning architecture that integrates atmospheric scattering physics with transformer-based attention mechanisms for single image dehazing. The network follows an **encoder-transformer-decoder** paradigm with explicit physics-guided modules. The complete code and trained weights will be released after the paper is accepted.
 
 ### Architecture Pipeline
 ```
