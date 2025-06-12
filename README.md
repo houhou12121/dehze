@@ -106,25 +106,135 @@ class PhysicsGuidedModule(nn.Module):
 
 ```python
 class AtmosphericScatteringTransformer(nn.Module):
+    def __init__(self, in_channels, num_heads=4, dim_feedforward=256, num_layers=1, dropout=0.1):
+        super(AtmosphericScatteringTransformer, self).__init__()
+        self.attention_save =False
+        # 确保 embed_dim 可以被 num_heads 整除
+        if in_channels % num_heads != 0:
+            in_channels = (in_channels // num_heads) * num_heads  # 调整为可整除的值
+        self.dropout = nn.Dropout(p=0.5)
+        # 多头注意力和前馈网络
+        self.layers = nn.ModuleList([
+            nn.ModuleList([
+                nn.MultiheadAttention(embed_dim=in_channels, num_heads=num_heads, dropout=dropout),
+                nn.Linear(in_channels, dim_feedforward),
+                nn.Dropout(dropout),
+                nn.Linear(dim_feedforward, in_channels),
+                nn.LayerNorm(in_channels)
+            ]) for _ in range(num_layers)
+        ])
+
+        # 物理先验卷积 (1x1卷积，将 t 和 A 映射到 Transformer 的输入空间)
+        self.physics_conv = nn.Conv2d(4, in_channels, kernel_size=1)
+        
+        self.dropout_ffn = nn.Dropout(dropout)
+
     def forward(self, x, t, A):
-        # Step 1: Physics prior embedding
+        B, C, H, W = x.size()
+
+        # 1. 构建物理先验嵌入
         physics_cat = torch.cat([t, A], dim=1)  # [B, 4, H, W]
         physics_embed = self.physics_conv(physics_cat)  # [B, C, H, W]
-        
-        # Step 2: Flatten for multi-head attention
+
+        # 2. Flatten for MHA
         x_flat = x.view(B, C, -1).permute(2, 0, 1)  # [HW, B, C]
-        pe_flat = physics_embed.view(B, C, -1).permute(2, 0, 1)
-        
-        # Step 3: Physics-guided attention
+        pe_flat = physics_embed.view(B, C, -1).permute(2, 0, 1)  # [HW, B, C]
+
+        # 3. 遍历多个Transformer层
         for idx, (attn, ffn1, dropout, ffn2, norm) in enumerate(self.layers):
-            if idx == 0:  # Apply physics guidance only in first layer
-                q = x_flat + pe_flat  # Physics-guided queries
+            if idx == 0:  # 只在第一个Transformer层加入物理先验嵌入
+                #q = x_flat + pe_flat
+                q = x_flat
             else:
-                q = x_flat  # Standard queries for subsequent layers
-            
-            attn_out, attention_weights = attn(q, x_flat, x_flat)
-            # ... standard transformer processing
-```
+                q = x_flat  # 后续的Transformer层不再加物理先验嵌入
+            k = x_flat
+            v = x_flat
+            #print(q.shape,k.shape,v.shape)
+            #attn_out, attention_map = attn(q, k, v)  # [HW, B, C]
+            attn_out, attention_map = attn(q, k, v, need_weights=True, average_attn_weights=False)
+            if self.attention_save:
+                # Print shape for debugging
+                print(attn_out.shape)
+                print(attention_map.shape)  # torch.Size([1, 169, 169])
+                print("I am in dehaze_transformer_new file")
+                # First move tensor to CPU and detach from computation graph
+                attention_map_cpu = attention_map.detach().cpu()
+                
+                # Correctly select the attention map based on its shape
+                attention_map_to_save = attention_map_cpu[0,0,:,:]  # Select first slice, resulting in [169, 169]
+                
+                # Save as NumPy format (保留原有的.npz保存功能)
+                np.savez('attention_map.npz', attention_map=attention_map_cpu.numpy())
+                
+                # 计算13×13块级注意力图
+                # 创建13×13的块级注意力图 - 使用平均值而不是累计和
+                block_attention = np.zeros((H, W))
+                for i in range(H):
+                    for j in range(W):
+                        # 计算当前像素在展平后的索引
+                        pixel_idx = i * W + j
+                        
+                        # 方法1：计算此像素对所有其他像素的平均注意力（行平均）
+                        block_attention[i, j] = np.mean(attention_map_to_save.numpy()[pixel_idx, :])
+                        
+                        # 或者方法2：计算所有像素对此像素的平均注意力（列平均）
+                        # block_attention[i, j] = np.mean(attention_map_to_save.numpy()[:, pixel_idx])
+                        
+                        # 或者方法3：结合行列平均，更全面地表示此像素的重要性
+                        # block_attention[i, j] = (np.mean(attention_map_to_save.numpy()[pixel_idx, :]) + 
+                        #                        np.mean(attention_map_to_save.numpy()[:, pixel_idx])) / 2
+                
+                # 归一化块级注意力图以增强对比度（可选）
+                # 这有助于使注意力模式更加明显
+                block_attention = (block_attention - np.min(block_attention)) / (np.max(block_attention) - np.min(block_attention))
+                
+                # 保存归一化的块级注意力图
+                np.savez('block_attention_map_normalized.npz', block_attention=block_attention)
+                
+                # 绘制归一化后的13×13块级注意力图
+                plt.figure(figsize=(10, 8))
+                plt.imshow(block_attention, cmap='hot', interpolation='nearest')
+                plt.colorbar()
+                plt.title("归一化块级注意力图 (13×13)")
+                plt.savefig('block_attention_map_normalized.png', bbox_inches='tight', dpi=300)
+                plt.close()
+                
+                # 以下是完整对比图绘制代码
+                # 创建子图：归一化的13×13块级注意力图与原始169×169注意力图对比
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+                
+                # 绘制原始169×169注意力图
+                im1 = ax1.imshow(attention_map_to_save.numpy(), cmap='hot', interpolation='nearest')
+                ax1.set_title("原始注意力图 (169×169)", fontsize=14)
+                fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+                
+                # 绘制归一化的13×13块级注意力图
+                im2 = ax2.imshow(block_attention, cmap='hot', interpolation='nearest')
+                ax2.set_title("归一化块级注意力图 (13×13)", fontsize=14)
+                fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+                
+                plt.tight_layout()
+                plt.savefig('attention_map_comparison_normalized.png', bbox_inches='tight', dpi=300)
+                plt.close()
+                
+                # Use sys.exit() instead of os.exit()
+                #import sys
+                #sys.exit()
+                # Instead of exiting, wait for user input before continuing
+                input("Press Enter to continue processing the next image...")
+                
+            x_attn = norm(x_flat + attn_out)
+
+            # 前馈网络 (Feed-Forward Network)
+            ffn_out = ffn2(self.dropout(F.relu(ffn1(x_attn))))
+            ffn_out = self.dropout_ffn(ffn_out)
+            x_flat = norm(x_attn + ffn_out)  # [HW, B, C]
+
+        # 4. 重塑回 [B, C, H, W]
+        out = x_flat.permute(1, 2, 0).view(B, C, H, W)
+        return out
+
+
 
 **Design Rationale**:
 - **Selective Integration**: Physics priors only applied to first transformer layer
