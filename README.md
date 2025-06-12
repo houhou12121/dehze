@@ -233,7 +233,7 @@ class AtmosphericScatteringTransformer(nn.Module):
         # 4. 重塑回 [B, C, H, W]
         out = x_flat.permute(1, 2, 0).view(B, C, H, W)
         return out
-
+'''
 
 
 **Design Rationale**:
