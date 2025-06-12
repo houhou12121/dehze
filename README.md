@@ -80,17 +80,29 @@ I(x) = J(x) * t(x) + A * (1 - t(x))
 ```
 
 ```python
+ 
+
 class PhysicsGuidedModule(nn.Module):
-    def __init__(self, in_channels):
-        # Transmission map estimation
-        self.t_branch = nn.Conv2d(in_channels, 1, kernel_size=3, padding=1)
-        # Atmospheric light estimation  
-        self.a_branch = nn.Conv2d(in_channels, 3, kernel_size=3, padding=1)
-    
+    def __init__(self, in_channels, hidden_dim=1):
+        super().__init__()
+        self.t_branch = nn.Sequential(
+            nn.Conv2d(in_channels, hidden_dim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_dim, 1, kernel_size=3, padding=1),
+            nn.Sigmoid()
+        )
+        self.a_branch = nn.Sequential(
+            nn.Conv2d(in_channels, hidden_dim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_dim, 3, kernel_size=3, padding=1),
+            nn.Sigmoid()
+        )
+
     def forward(self, x):
-        t = torch.sigmoid(self.t_branch(x))  # [B, 1, H, W] ∈ [0,1]
-        A = torch.sigmoid(self.a_branch(x))  # [B, 3, H, W] ∈ [0,1]
+        t = self.t_branch(x)
+        A = self.a_branch(x)
         return t, A
+
 ```
 
 **Output Specifications**:
